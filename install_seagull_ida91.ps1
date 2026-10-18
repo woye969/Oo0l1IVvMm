@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $targets = @((Join-Path $IdaRoot 'plugins'))
 if ($InstallUserCopy) { $targets += $UserPluginRoot }
-$required = @('ida_seagull_deob.py', 'seagull_core.py', 'README_seagull_deob.md')
+$required = @('Oo0l1IVvMm.py', 'seagull_core.py', 'README.md')
 
 foreach ($target in $targets) {
     New-Item -ItemType Directory -Force -Path $target | Out-Null
@@ -26,7 +26,7 @@ foreach ($target in $targets) {
         throw "Capstone package not found: $capstoneSource"
     }
     Copy-Item -LiteralPath $capstoneSource -Destination $vendor -Recurse -Force
-    Write-Host "Installed Seagull 0.9.0 -> $target"
+    Write-Host "Installed Oo0l1IVvMm 1.0.0 -> $target"
 }
 
 Write-Host 'F5 hook files and bundled Capstone are installed. Restart IDA before testing.'

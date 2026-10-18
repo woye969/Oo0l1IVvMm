@@ -1,11 +1,24 @@
-# Seagull Deobfuscator
+# Oo0l1IVvMm
 
 IDA Pro 9.x (Hex-Rays x64) 反混淆插件 / An IDA Pro deobfuscation plugin for
-control-flow-flattened code. **手动启用、零常驻开销**：不点击插件时，F5 就是原生
-Hex-Rays 的速度；点击后武装整条恢复链，再按 F5 直接看到反混淆后的伪代码。
+control-flow-flattened code. **双模式、手动启用、零常驻开销**：不选模式时 F5
+就是原生 Hex-Rays 的速度；在 `Edit → Plugins → Oo0l1IVvMm` 选择模式后，
+F5 自动反混淆。
 
-An all-around, **opt-in** deobfuscation stack: disarmed by default (vanilla F5
-speed), armed with one click.
+Two modes, **opt-in**, zero resident cost: pick a mode from
+`Edit → Plugins → Oo0l1IVvMm` (or its menu actions), then plain F5
+deobfuscates. Disarmed by default.
+
+## 模式 / Modes
+
+| 模式 | 针对的混淆 | 引擎组合 |
+|---|---|---|
+| **MIN** | 经典 OLLVM 平坦化（中央分发器 + 寄存器状态） | 物化/截断修复 + unflat valrange + D-810 指令级简化（链解析器关闭，轻量） |
+| **MAX** | 内联编码表分发（`jmp reg` 家族：栈槽状态/查表加密/cmov 汇合） | MIN 全部 + 具体走链解析 + 微码直达边/jz 拆分 + 死分发链删除 |
+
+选择方式：点击插件条目弹出 MIN/MAX/OFF 选择框，或直接用菜单
+`Oo0l1IVvMm: MAX mode (jmp-reg dispatch)` / `MIN mode (classic OLLVM)`。
+快捷键 `Ctrl+Shift+Alt+D` 同样弹选择框。OFF 解除武装恢复原生速度。
 
 ## 它解决什么 / What it solves
 
@@ -56,7 +69,7 @@ powershell -ExecutionPolicy Bypass -File install_seagull_ida91.ps1 [-IdaRoot <ID
 ## 使用 / Usage（手动模式）
 
 1. 打开样本，**Edit → Plugins → Seagull Deobfuscator**（或菜单
-   `Seagull: arm/disarm all-around deobfuscation`，快捷键
+   `Oo0l1IVvMm: MAX/MIN mode` 菜单，快捷键
    `Ctrl+Shift+Alt+D`）→ 武装。
 2. 在目标函数上按 **F5** → 反混淆后的伪代码。
 3. 再点一次 → 解除武装，F5 恢复原生速度。分析结果按函数缓存。

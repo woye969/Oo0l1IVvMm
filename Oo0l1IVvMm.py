@@ -1,15 +1,21 @@
-"""Seagull Deobfuscator - IDA Pro 7.4+ / 8.x / 9.x
+"""Oo0l1IVvMm - IDA Pro 7.4+ / 8.x / 9.x deobfuscation plugin
 
-Conservative static triage for native obfuscation.  The plugin is intentionally
-non-destructive: it annotates likely control-flow-flattening dispatchers,
-state updates, indirect jump tables, opaque predicates, and anti-disassembly
-idioms, then exports a machine-readable report.  It does not pretend that a
-single script can solve every VM protector or cryptographic check.
+Opt-in deobfuscation stack with two modes, both selected from
+Edit -> Plugins -> Oo0l1IVvMm (or its menu actions); nothing runs
+until a mode is picked, and F5 stays at native speed while disarmed:
 
-Install by copying this file to IDA's plugins directory.  Menu:
-    Edit -> Plugins -> Seagull Deobfuscator
+  MIN - classic OLLVM flattening (central dispatcher):
+        unflat valrange unflattener + D-810 instruction simplification,
+        plus materialization / jtbl lifting for truncated functions.
+  MAX - encoded inline dispatch (the `jmp reg` family):
+        everything in MIN plus the concrete dispatch-chain resolver,
+        microcode direct-edge / jz rewriting and dead dispatcher removal.
 
-Hotkey: Ctrl+Shift+Alt+D (deflatten current function and refresh pseudocode)
+After a mode is armed, plain F5 decompilation goes through the recovery
+chain. The scanner actions (scan current/all, recover encoded CFG targets)
+only annotate and report; they never patch bytes.
+
+Hotkey: Ctrl+Shift+Alt+D (opens the mode chooser)
 """
 
 from __future__ import print_function
@@ -33,8 +39,8 @@ import idautils
 import idc
 
 
-PLUGIN_NAME = "Seagull Deobfuscator"
-PLUGIN_VERSION = "0.9.0"
+PLUGIN_NAME = "Oo0l1IVvMm"
+PLUGIN_VERSION = "1.0.0"
 COMMENT_TAG = "[SEAGULL-DEOB]"
 _MICROCODE_UNFLAT = None
 _UNFLAT_ACTIVE = False
@@ -45,6 +51,7 @@ _UI_HOOK = None
 _UI_TIMER = None
 _REWIRED_ENTRIES = set()
 _ARMED = False
+_MODE = None   # None | 'min' (classic OLLVM) | 'max' (encoded jmp-reg dispatch)
 
 
 def _is_unflat_active():
@@ -86,7 +93,7 @@ def _analysis_for_entry(entry_ea):
         # kept in a stack slot: the resolver re-executes the chain once per
         # site with that site's concrete state values.
         try:
-            if any(v for v in result.edges.values()):
+            if _MODE == "max" and any(v for v in result.edges.values()):
                 resolution = seagull_core.resolve_chain(ida_bytes.get_bytes, entry_ea, end)
                 if resolution is not None:
                     result.chain_rewires = resolution.rewires
@@ -1388,17 +1395,28 @@ def seagull_armed():
     return _ARMED
 
 
-def arm_seagull():
-    """Explicitly start the full deobfuscation stack for this session.
+def arm_seagull(mode="max"):
+    """Explicitly start the deobfuscation stack for this session.
 
-    Called from the plugin entry, the all-around menu action or the hotkey.
-    While armed, every F5 goes through the recovery chain (Seagull structure
-    + unflat classic dispatcher + D-810 instruction simplification); while
-    disarmed, decompilation is vanilla Hex-Rays with zero overhead.
+    Modes:
+      'min' - classic OLLVM flattening (central dispatcher): unflat's
+              valrange unflattener + D-810 instruction simplification, plus
+              materialization/jtbl lifting for truncated functions. The
+              expensive dispatch-chain resolver stays off.
+      'max' - encoded inline dispatch (the `jmp reg` family): everything in
+              'min' plus the concrete chain resolver, microcode direct-edge
+              /jz rewriting and dead dispatcher removal.
+
+    While armed, every F5 goes through the recovery chain; while disarmed,
+    decompilation is vanilla Hex-Rays with zero overhead.
     """
-    global _ARMED
-    if _ARMED:
+    global _ARMED, _MODE
+    if _ARMED and _MODE == mode:
         return True
+    if _MODE != mode:
+        # cached analyses depend on the mode (chain resolver side effects)
+        _HEX_ANALYSIS.clear()
+    _MODE = mode
     _ARMED = True
     ok_hook = _install_hexrays_hook()
     ok_unflat = _start_preferred_unflattener()
@@ -1426,10 +1444,12 @@ def arm_seagull():
 
 def disarm_seagull():
     """Stop every optimizer this plugin started; F5 returns to vanilla."""
-    global _ARMED, _HEX_HOOK, _UNFLAT_ACTIVE, _MICROCODE_UNFLAT
+    global _ARMED, _MODE, _HEX_HOOK, _UNFLAT_ACTIVE, _MICROCODE_UNFLAT
     if not _ARMED:
+        _MODE = None
         return True
     _ARMED = False
+    _MODE = None
     if _HEX_HOOK is not None:
         try:
             _HEX_HOOK.unhook()
@@ -1452,13 +1472,30 @@ def disarm_seagull():
     return True
 
 
-def toggle_allround():
-    if _ARMED:
+def arm_min():
+    arm_seagull("min")
+    ida_kernwin.info("Oo0l1IVvMm MIN armed (classic OLLVM) - F5 now deobfuscates")
+
+
+def arm_max():
+    arm_seagull("max")
+    ida_kernwin.info("Oo0l1IVvMm MAX armed (jmp-reg dispatch) - F5 now deobfuscates")
+
+
+def choose_mode():
+    """Plugin entry dialog: pick MIN / MAX, or turn off."""
+    btn = ida_kernwin.ask_buttons("MIN", "MAX", "OFF", 1,
+                   "Choose deobfuscation mode\n"
+                   "MIN: classic OLLVM flattening (central dispatcher)\n"
+                   "MAX: encoded inline dispatch (the jmp reg family)\n"
+                   "OFF: disarm - vanilla F5")
+    if btn == "MIN":
+        arm_min()
+    elif btn == "MAX":
+        arm_max()
+    elif btn == "OFF":
         disarm_seagull()
-        ida_kernwin.info("Seagull: disarmed - F5 is vanilla again")
-    else:
-        arm_seagull()
-        ida_kernwin.info("Seagull: armed - F5 now runs the full recovery chain")
+        ida_kernwin.info("Oo0l1IVvMm disarmed - F5 is vanilla again")
 
 
 def allround_mode():
@@ -1542,7 +1579,7 @@ class SeagullPlugin(idaapi.plugin_t):
     flags = idaapi.PLUGIN_FIX
     comment = "Conservative native obfuscation triage"
     help = "Find CFF dispatchers, indirect jump tables, opaque predicates, and anti-disassembly idioms"
-    wanted_name = PLUGIN_NAME
+    wanted_name = PLUGIN_NAME  # "Oo0l1IVvMm"
     # D-810 already uses Ctrl+Shift+D in the user's IDA installation.
     wanted_hotkey = "Ctrl+Shift+Alt+D"
 
@@ -1551,6 +1588,7 @@ class SeagullPlugin(idaapi.plugin_t):
     ACTION_DEFLAT = "seagull:deflatten-current"
     ACTION_RECOVER = "seagull:recover-static-cfg"
     ACTION_ALLROUND = "seagull:allround-mode"
+    ACTION_MINMODE = "seagull:min-mode"
     ACTION_MBA = "seagull:toggle-d810-instructions"
     ACTION_SWITCHCASE = "seagull:d810-switch-case"
 
@@ -1559,29 +1597,33 @@ class SeagullPlugin(idaapi.plugin_t):
             _install_ui_hook()
             _schedule_late_hooks()
             ida_kernwin.register_action(ida_kernwin.action_desc_t(
-                self.ACTION_SCAN, "Seagull: scan current function", SeagullHandler(analyze_current),
+                self.ACTION_SCAN, "Oo0l1IVvMm: scan current function", SeagullHandler(analyze_current),
                 self.wanted_hotkey, self.help, 0))
             ida_kernwin.register_action(ida_kernwin.action_desc_t(
-                self.ACTION_ALL, "Seagull: scan all functions", SeagullHandler(analyze_all),
+                self.ACTION_ALL, "Oo0l1IVvMm: scan all functions", SeagullHandler(analyze_all),
                 None, self.help, 0))
             ida_kernwin.register_action(ida_kernwin.action_desc_t(
-                self.ACTION_DEFLAT, "Seagull: enable Hex-Rays optimizers",
+                self.ACTION_DEFLAT, "Oo0l1IVvMm: enable Hex-Rays optimizers",
                 SeagullHandler(deflatten_current), None,
                 "Enable installed Hex-Rays optimizers", 0))
             ida_kernwin.register_action(ida_kernwin.action_desc_t(
-                self.ACTION_RECOVER, "Seagull: recover encoded CFG targets",
+                self.ACTION_RECOVER, "Oo0l1IVvMm: recover encoded CFG targets",
                 SeagullHandler(lambda: _recover_static_cfg()), None,
                 "Recover finite encoded indirect jump targets", 0))
             ida_kernwin.register_action(ida_kernwin.action_desc_t(
-                self.ACTION_ALLROUND, "Seagull: arm/disarm all-around deobfuscation",
-                SeagullHandler(toggle_allround), None,
-                "Arm the full deobfuscation stack: Seagull structure recovery, unflat classic dispatcher, D-810 instruction simplification", 0))
+                self.ACTION_ALLROUND, "Oo0l1IVvMm: MAX mode (jmp-reg dispatch)",
+                SeagullHandler(arm_max), None,
+                "Full stack: structure recovery, chain resolver, unflat, D-810 instructions", 0))
             ida_kernwin.register_action(ida_kernwin.action_desc_t(
-                self.ACTION_MBA, "Seagull: toggle D-810 instruction simplifier (MBA)",
+                self.ACTION_MINMODE, "Oo0l1IVvMm: MIN mode (classic OLLVM)",
+                SeagullHandler(arm_min), None,
+                "Classic OLLVM dispatcher: unflat + D-810 instructions, chain resolver off", 0))
+            ida_kernwin.register_action(ida_kernwin.action_desc_t(
+                self.ACTION_MBA, "Oo0l1IVvMm: toggle D-810 instruction simplifier (MBA)",
                 SeagullHandler(toggle_d810_instructions), None,
                 "Toggle D-810's 177 instruction rules (MBA, constants, opaque predicates, Z3)", 0))
             ida_kernwin.register_action(ida_kernwin.action_desc_t(
-                self.ACTION_SWITCHCASE, "Seagull: D-810 switch-case unflattener",
+                self.ACTION_SWITCHCASE, "Oo0l1IVvMm: D-810 switch-case unflattener",
                 SeagullHandler(toggle_d810_switch_case), None,
                 "Switch D-810 to its switch-case unflattening profile", 0))
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_SCAN, ida_kernwin.SETMENU_APP)
@@ -1589,6 +1631,7 @@ class SeagullPlugin(idaapi.plugin_t):
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_DEFLAT, ida_kernwin.SETMENU_APP)
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_RECOVER, ida_kernwin.SETMENU_APP)
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_ALLROUND, ida_kernwin.SETMENU_APP)
+            ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_MINMODE, ida_kernwin.SETMENU_APP)
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_MBA, ida_kernwin.SETMENU_APP)
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_SWITCHCASE, ida_kernwin.SETMENU_APP)
             try:
@@ -1603,9 +1646,9 @@ class SeagullPlugin(idaapi.plugin_t):
             return idaapi.PLUGIN_SKIP
 
     def run(self, arg):
-        # Clicking the plugin entry (Edit -> Plugins -> Seagull Deobfuscator)
-        # toggles the whole stack: nothing runs until this is clicked.
-        toggle_allround()
+        # Clicking the plugin entry (Edit -> Plugins -> Oo0l1IVvMm) opens the
+        # mode chooser; nothing runs until a mode is picked.
+        choose_mode()
 
     def term(self):
         global _D810_STATE, _HEX_HOOK, _HEX_ANALYSIS, _UI_HOOK, _UI_TIMER, _UNFLAT_ACTIVE
@@ -1645,7 +1688,7 @@ class SeagullPlugin(idaapi.plugin_t):
                 pass
         _UNFLAT_ACTIVE = False
         for action in (self.ACTION_SCAN, self.ACTION_ALL, self.ACTION_DEFLAT, self.ACTION_RECOVER,
-                       self.ACTION_ALLROUND, self.ACTION_MBA, self.ACTION_SWITCHCASE):
+                       self.ACTION_ALLROUND, self.ACTION_MINMODE, self.ACTION_MBA, self.ACTION_SWITCHCASE):
             try:
                 ida_kernwin.unregister_action(action)
             except Exception:
