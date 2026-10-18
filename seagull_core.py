@@ -528,6 +528,13 @@ def _discover_chain_regs(an, chain_head):
     return state_reg, key_reg
 
 
+def _pin_seeds(an, seeds):
+    """Overwrite seeded registers in every abstract state and re-propagate."""
+    for ea, st in an.states.items():
+        for reg, val in seeds.items():
+            st.write(reg, values(val & MASK))
+
+
 class ChainResolution(object):
     """Outcome of dispatch-chain resolution.
 
@@ -547,8 +554,20 @@ class ChainResolution(object):
         self.site_kinds = site_kinds or {}
 
 
-def resolve_chain(read, start, end, max_steps_per_site=4000):
+def resolve_chain(read, start, end, max_steps_per_site=4000, seeds=None,
+                  mem_overlay=None):
     """Resolve every state-update site's real next block.
+
+    seeds: optional {regname: int} concrete values injected at the function
+    entry state (e.g. a runtime-captured dispatch key that lives in a
+    caller-provided buffer). Every seeded register is pinned for the whole
+    run, which lets the walker resolve sites whose key normally comes from
+    an input buffer.
+
+    mem_overlay: optional {ea: bytes} patches applied on top of `read`
+    (e.g. runtime-captured table contents for lazily-built dispatch
+    tables). Applied through a wrapping reader so lookups see the live
+    memory instead of the file image.
 
     Returns a ChainResolution (or None when no dispatcher chain exists).
     """
@@ -556,12 +575,35 @@ def resolve_chain(read, start, end, max_steps_per_site=4000):
     CS_GRP_JUMP = capstone.CS_GRP_JUMP
     CS_GRP_RET = capstone.CS_GRP_RET
 
+    if mem_overlay:
+        class _Overlay:
+            def __init__(self, inner):
+                self.inner = inner
+            def __call__(self, ea, size):
+                for oea, obytes in mem_overlay.items():
+                    if oea <= ea and ea + size <= oea + len(obytes):
+                        return obytes[ea - oea: ea - oea + size]
+                return self.inner(ea, size)
+        read = _Overlay(read)
+
     base = Analyzer(read, start, end).run()
     if not base.edges:
         return None
     sticky = {key: values(v) for key, v in slot_inits(base, start, end).items()}
+    if seeds:
+        import capstone
+        for reg, val in seeds.items():
+            lo = reg.lower()
+            if lo in ("ecx", "rcx"):
+                # seed both the 64-bit root and pin via sticky reg mechanism
+                sticky[("reg:" + lo, 4)] = values(val & 0xFFFFFFFF)
+            else:
+                sticky[("reg:" + lo, 8)] = values(val & MASK)
+        # teach StickyAnalyzer to apply register seeds on every state copy
     StickyAnalyzer.sticky_slots = sticky
     an = StickyAnalyzer(read, start, end).run()
+    if seeds:
+        _pin_seeds(an, seeds)
 
     walker = ChainWalker(an)
 

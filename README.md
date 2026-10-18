@@ -78,6 +78,20 @@ powershell -ExecutionPolicy Bypass -File install_seagull_ida91.ps1 [-IdaRoot <ID
 `recover encoded CFG targets`、`toggle D-810 instruction simplifier`、
 `D-810 switch-case unflattener`。
 
+## 运行时快照 / Runtime snapshots（对付"表运行时才构建"的样本）
+
+有些样本的分发表/表指针/密钥**在文件里不存在**——运行时（如首次调用、登录后）
+才解密构建。静态任何工具都无解；Oo0l1IVvMm v1.1 起支持**调试器快照**：
+
+1. 用 IDA 调试器跑到表已构建的时刻（如题目自带的 md5 比较断点）；
+2. 执行 `docs/snapshot_collect.py` 的 `snapshot_collect()`（导出各段内存 +
+   寄存器 + 栈，生成 `manifest.json`）;
+3. 菜单 `Oo0l1IVvMm: load runtime snapshot` 选择该 manifest；
+4. MAX 模式 F5 —— `resolve_chain` 用快照内存替代文件镜像、用捕获的种子寄存器
+   钉死分发密钥，静态恢复完整 CFG。
+
+`resolve_chain(..., seeds={reg: val}, mem_overlay={ea: bytes})` 也可编程调用。
+
 ## 原理 / How it works
 
 1. **递归解码物化**：x86-64 有界抽象解释器（自研 `seagull_core`）从函数入口

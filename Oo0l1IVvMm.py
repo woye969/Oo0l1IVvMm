@@ -40,7 +40,7 @@ import idc
 
 
 PLUGIN_NAME = "Oo0l1IVvMm"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.1.0"
 COMMENT_TAG = "[SEAGULL-DEOB]"
 _MICROCODE_UNFLAT = None
 _UNFLAT_ACTIVE = False
@@ -94,7 +94,10 @@ def _analysis_for_entry(entry_ea):
         # site with that site's concrete state values.
         try:
             if _MODE == "max" and any(v for v in result.edges.values()):
-                resolution = seagull_core.resolve_chain(ida_bytes.get_bytes, entry_ea, end)
+                resolution = seagull_core.resolve_chain(
+                    ida_bytes.get_bytes, entry_ea, end,
+                    seeds=_SNAPSHOT_SEEDS.get(entry_ea),
+                    mem_overlay=_SNAPSHOT_MEM.get(entry_ea))
                 if resolution is not None:
                     result.chain_rewires = resolution.rewires
                     result.chain_head = resolution.chain_head
@@ -1391,6 +1394,50 @@ def enable_microcode_deflatten(refresh=True):
         return False
 
 
+def load_runtime_snapshot(path=None):
+    """Load a runtime snapshot captured from a live process.
+
+    Expected JSON manifest next to a set of .bin region files:
+      { "seeds": {"<entry_ea_hex>": {"ecx": 305419896, ...}},
+        "regions": [{"entry": "140094e0", "ea": "1a2b3000", "bytes": "f.bin"}] }
+
+    regions describe runtime-built dispatch tables (heap blocks) keyed to the
+    function that consumes them; seeds carry concrete register values captured
+    at the same moment (e.g. the dispatch key the real input provided).
+    resolve_chain then reads those regions instead of the file image and walks
+    the chain with the pinned seeds - recovering CFG for samples whose tables
+    never exist in the file.
+    """
+    import json
+    global _SNAPSHOT_FILE
+    path = path or ida_kernwin.ask_file(True, "*.json", "Oo0l1IVvMm: choose runtime snapshot manifest")
+    if not path:
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as fp:
+            man = json.load(fp)
+        base_dir = os.path.dirname(path)
+        _SNAPSHOT_SEEDS.clear()
+        _SNAPSHOT_MEM.clear()
+        for ea_hex, regs in (man.get("seeds") or {}).items():
+            _SNAPSHOT_SEEDS[int(ea_hex, 16)] = {k: int(v) for k, v in regs.items()}
+        for reg in man.get("regions") or []:
+            entry = int(reg["entry"], 16)
+            ea = int(reg["ea"], 16)
+            with open(os.path.join(base_dir, reg["bytes"]), "rb") as fp:
+                _SNAPSHOT_MEM[entry] = {ea: fp.read()}
+        _SNAPSHOT_FILE = path
+        _HEX_ANALYSIS.clear()
+        n_seed = len(_SNAPSHOT_SEEDS)
+        n_mem = len(_SNAPSHOT_MEM)
+        print("[%s] snapshot loaded: %d seeded entries, %d memory regions (re-analyze with F5)" %
+              (PLUGIN_NAME, n_seed, n_mem))
+        return True
+    except Exception:
+        print("[%s] snapshot load failed: %s" % (PLUGIN_NAME, traceback.format_exc()))
+        return False
+
+
 def seagull_armed():
     return _ARMED
 
@@ -1589,6 +1636,7 @@ class SeagullPlugin(idaapi.plugin_t):
     ACTION_RECOVER = "seagull:recover-static-cfg"
     ACTION_ALLROUND = "seagull:allround-mode"
     ACTION_MINMODE = "seagull:min-mode"
+    ACTION_SNAPSHOT = "seagull:load-snapshot"
     ACTION_MBA = "seagull:toggle-d810-instructions"
     ACTION_SWITCHCASE = "seagull:d810-switch-case"
 
@@ -1623,6 +1671,10 @@ class SeagullPlugin(idaapi.plugin_t):
                 SeagullHandler(toggle_d810_instructions), None,
                 "Toggle D-810's 177 instruction rules (MBA, constants, opaque predicates, Z3)", 0))
             ida_kernwin.register_action(ida_kernwin.action_desc_t(
+                self.ACTION_SNAPSHOT, "Oo0l1IVvMm: load runtime snapshot",
+                SeagullHandler(load_runtime_snapshot), None,
+                "Load a runtime-captured snapshot (seeds + dispatch tables) for lazily-initialized obfuscation", 0))
+            ida_kernwin.register_action(ida_kernwin.action_desc_t(
                 self.ACTION_SWITCHCASE, "Oo0l1IVvMm: D-810 switch-case unflattener",
                 SeagullHandler(toggle_d810_switch_case), None,
                 "Switch D-810 to its switch-case unflattening profile", 0))
@@ -1632,6 +1684,7 @@ class SeagullPlugin(idaapi.plugin_t):
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_RECOVER, ida_kernwin.SETMENU_APP)
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_ALLROUND, ida_kernwin.SETMENU_APP)
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_MINMODE, ida_kernwin.SETMENU_APP)
+            ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_SNAPSHOT, ida_kernwin.SETMENU_APP)
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_MBA, ida_kernwin.SETMENU_APP)
             ida_kernwin.attach_action_to_menu("Edit/Plugins/", self.ACTION_SWITCHCASE, ida_kernwin.SETMENU_APP)
             try:
@@ -1688,7 +1741,8 @@ class SeagullPlugin(idaapi.plugin_t):
                 pass
         _UNFLAT_ACTIVE = False
         for action in (self.ACTION_SCAN, self.ACTION_ALL, self.ACTION_DEFLAT, self.ACTION_RECOVER,
-                       self.ACTION_ALLROUND, self.ACTION_MINMODE, self.ACTION_MBA, self.ACTION_SWITCHCASE):
+                       self.ACTION_ALLROUND, self.ACTION_MINMODE, self.ACTION_SNAPSHOT,
+                       self.ACTION_MBA, self.ACTION_SWITCHCASE):
             try:
                 ida_kernwin.unregister_action(action)
             except Exception:
