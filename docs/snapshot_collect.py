@@ -22,7 +22,7 @@ import ida_dbg
 import ida_segment
 import ida_bytes
 
-OUT_DIR = r"C:\Users\jianr\AppData\Local\Temp\oo_snapshot_out"
+OUT_DIR = os.path.join(os.environ.get("TEMP", "."), "oo_snapshot_out")
 
 
 def snapshot_collect(out_dir=OUT_DIR, max_bytes_per_seg=0x40000):

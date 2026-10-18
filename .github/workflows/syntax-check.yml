@@ -1,0 +1,25 @@
+name: syntax-check
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: AST compile plugin sources
+        run: |
+          python -m py_compile Oo0l1IVvMm.py seagull_core.py docs/snapshot_collect.py
+      - name: Import analyzer standalone (no IDA required)
+        run: |
+          python -c "import seagull_core; print('core import OK; capstone available:', seagull_core.CAPSTONE_AVAILABLE)"
+      - name: Capstone smoke test
+        run: |
+          pip install capstone
+          python -c "import seagull_core; assert seagull_core.CAPSTONE_AVAILABLE, 'capstone failed to load'; print('capstone OK')"

@@ -52,7 +52,7 @@ deobfuscates. Disarmed by default.
 
 ```
 # 方式一：脚本（默认装入 IDA 程序 plugins 目录）
-powershell -ExecutionPolicy Bypass -File install_seagull_ida91.ps1 [-IdaRoot <IDA目录>]
+powershell -ExecutionPolicy Bypass -File install.ps1 [-IdaRoot <IDA dir>]
 
 # 方式二：手工复制 ida_seagull_deob.py 与 seagull_core.py 到 IDA 的 plugins 目录
 ```
