@@ -514,11 +514,14 @@ def _discover_chain_regs(an, chain_head):
             break
         cur += ins.size
     for ins in insns:
-        if ins.mnemonic in ("cmp", "test") and ins.operands[0].type == X86_OP_REG:
-            state_reg = ins.reg_name(ins.operands[0].reg)
+        if ins.mnemonic in ("cmp", "test"):
+            for op in ins.operands[:2]:
+                if op.type == X86_OP_REG:
+                    state_reg = ins.reg_name(op.reg)
+                    break
             break
     for ins in reversed(insns):
-        if ins.mnemonic == "add" and ins.operands[0].type == X86_OP_REG \
+        if ins.mnemonic in ("add", "sub", "xor", "or", "and") and ins.operands[0].type == X86_OP_REG \
                 and ins.operands[1].type == X86_OP_REG:
             key_reg = ins.reg_name(ins.operands[1].reg)
             break
